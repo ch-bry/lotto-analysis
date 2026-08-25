@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>백테스트 — 로또 6/45 조합 분석</title>
+<meta name="description" content="워크포워드 백테스트와 8,145,060가지 전수 열거로 검증한 포트폴리오 성능. ROI는 정직하게 약 -50%입니다.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%232a7fd4'/%3E%3Ctext x='16' y='22' font-size='16' font-weight='700' text-anchor='middle' fill='white' font-family='sans-serif'%3E45%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>백테스트</h1>
+  <p class="muted small" id="subtitle"></p>
+
+  <div class="notice">
+    <b>먼저 결론부터</b> — 이 방식으로도 <b>돈을 벌 수는 없습니다.</b>
+    로또는 판매액의 약 50%만 당첨금으로 돌려주므로 <b>장기 기대수익률은 약 -50%</b>이고,
+    이 사이트는 그것을 바꾸지 못합니다. 개선되는 것은 수익률이 아니라
+    <b>같은 돈을 쓸 때의 당첨 분포</b>입니다.
+    <ul>
+      <li>아래 백테스트의 실현 ROI는 <b>-80% 근처</b>로 나오는데, 이것도 정상입니다.
+          그 50% 중 대부분(약 32%p)은 1~3등 몫인데, 3등조차 약 3만분의 1이라
+          <span id="ntickets-note">수천 장</span> 규모의 표본에서는 거의 나오지 않기 때문입니다.
+          실제로 회수되는 것은 4·5등 정액 상금뿐이고 그 기댓값은 티켓당 약 180원입니다.</li>
+      <li>따라서 <b>238회차짜리 실현 ROI 비교는 정보가 없습니다.</b>
+          의미 있는 것은 아래 <b>전수 열거</b> 결과와 <b>인기 배수</b>입니다.</li>
+    </ul>
+  </div>
+
+  <h2>전수 열거 검증</h2>
+  <p class="small">
+    가능한 추첨 결과 <b>8,145,060가지를 하나도 빠짐없이</b> 대입해 계산했습니다.
+    시뮬레이션이 아니므로 표본오차가 <b>0</b>입니다. 특히 1등 확률(약 100만분의 1)은
+    몬테카를로로는 검증 자체가 불가능합니다 — 100만 번 돌려도 기대 적중이 한 번 남짓이기 때문입니다.
+  </p>
+  <div id="exact" class="loading">불러오는 중…</div>
+
+  <h2>워크포워드 백테스트</h2>
+  <p class="small">
+    회차 <i>t</i>의 조합을 만들 때 <b><i>t</i>−1 회차까지의 데이터만</b> 사용했습니다.
+    미래 정보가 새어 들어가지 않도록 인기도 모델도 그 시점 기준으로 다시 학습합니다.
+    <b>두 방식 모두 회차마다 같은 횟수(<span id="nreps"></span>회)를 반복해 평균</b>을 냈습니다 —
+    한쪽만 여러 번 평균하면 희귀 등수의 기댓값이 그쪽에만 반영되어 비교가 왜곡됩니다.
+  </p>
+  <div id="wf"></div>
+
+  <h2>왜 백테스트로 "수령액 개선"은 보이지 않는가</h2>
+  <div class="card small">
+    <p>정직하게 말씀드립니다. 위 백테스트에서 <b>1등 수령액 개선은 측정할 수 없습니다.</b>
+    <span id="jackpot-math"></span>
+    백테스트에서 1등은 단 한 번도 나오지 않으며, 나올 수도 없습니다.</p>
+    <p>그래서 수령액 개선은 다른 방법으로 검증했습니다.
+    실제로 1등이 나온 <b>모든 과거 회차</b>에 대해, 모델이 그 당첨번호를 "인기"로 봤는지
+    "비인기"로 봤는지 나눠서 <b>실제 지급된 1인당 당첨금</b>을 비교했습니다.
+    이 검증은 <a href="index.html">추천 페이지 하단</a>에 있습니다.
+    모델은 1등 데이터를 학습에 전혀 쓰지 않았으므로 완전한 아웃오브샘플 검증입니다.</p>
+  </div>
+
+  <h2>회차별 상세</h2>
+  <div id="rounds"></div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+(async () => {
+  APP.chrome("backtest.html");
+  const f = APP.fmt;
+  let bt, meta;
+  try {
+    [meta, bt] = await Promise.all([APP.load("meta.json"), APP.load("backtest.json")]);
+  } catch (e) { APP.set("exact", `<div class="err">${e.message}</div>`); return; }
+
+  APP.el("subtitle").textContent =
+    `${meta.n_draws}회차 (1~${meta.latest_draw}회) 기준 · 생성 ${meta.generated_at.slice(0, 16).replace("T", " ")}`;
+
+  // ---------------- 전수 열거 ----------------
+  APP.set("exact", Object.keys(bt.montecarlo).map(n => {
+    const d = bt.montecarlo[n], o = d.optimized, b = d.random;
+    const same = Math.abs(o.p_jackpot - b.p_jackpot) < 1e-15;
+    return `<h3>${n}장 구매 시</h3>
+      <div class="card table-scroll"><table>
+      <thead><tr><th>지표</th><th class="num">자동선택</th><th class="num">최적화</th>
+        <th class="num">변화</th></tr></thead><tbody>
+      <tr><td>1등 당첨 확률</td><td class="num">${b.p_jackpot.toExponential(4)}</td>
+        <td class="num">${o.p_jackpot.toExponential(4)}</td>
+        <td class="num ${same ? "flat" : "down"}">${same ? "정확히 동일" : "불일치 — 버그"}</td></tr>
+      <tr><td>최소 1개 이상 당첨 확률</td><td class="num">${f.pct(b.p_any_prize, 3)}</td>
+        <td class="num">${f.pct(o.p_any_prize, 3)}</td>
+        <td class="num up">${f.sign(o.p_any_prize / b.p_any_prize - 1)}</td></tr>
+      <tr><td>평균 당첨 티켓 수</td><td class="num">${b.mean_prizes.toFixed(5)}</td>
+        <td class="num">${o.mean_prizes.toFixed(5)}</td>
+        <td class="num flat">동일 (기댓값 불변)</td></tr>
+      <tr><td>회차당 기대 정액 당첨금 (4·5등)</td>
+        <td class="num">${f.won(b.mean_fixed_prize)}</td>
+        <td class="num">${f.won(o.mean_fixed_prize)}</td>
+        <td class="num flat">동일</td></tr>
+      <tr><td>평균 인기 배수</td><td class="num">${b.mean_multiplier.toFixed(3)}</td>
+        <td class="num">${o.mean_multiplier.toFixed(3)}</td>
+        <td class="num up">${f.sign(o.mean_multiplier / b.mean_multiplier - 1)}</td></tr>
+      <tr><td>티켓 간 평균 겹침</td><td class="num">${b.mean_overlap.toFixed(2)}개</td>
+        <td class="num">${o.mean_overlap.toFixed(2)}개</td>
+        <td class="num up">${f.sign(o.mean_overlap / b.mean_overlap - 1)}</td></tr>
+      </tbody></table>
+      <p class="hint">이론값 P(1등) = ${n} ÷ 8,145,060 = ${(Number(n) / 8145060).toExponential(4)}.
+      서로 다른 티켓 ${n}장이면 어떤 조합을 고르든 이 값이며, 코드에도 이 등식을 검사하는 단언문이 있습니다.</p>
+      </div>`;
+  }).join(""));
+
+  // ---------------- 워크포워드 ----------------
+  APP.set("wf", Object.keys(bt.walk_forward).map(n => {
+    const s = bt.walk_forward[n].summary, o = s.ours, r = s.random;
+    return `<h3>${n}장 × ${s.n_rounds}회차</h3>
+      <div class="grid grid-3">
+        <div class="card stat"><div class="label">총 구매액</div>
+          <div class="value">${f.won(s.spend)}</div>
+          <div class="sub">${s.n_rounds}회차 × ${n}장 × 1,000원 × ${s.n_reps}회 반복 평균</div></div>
+        <div class="card stat"><div class="label">실현 ROI — 자동선택</div>
+          <div class="value down">${(r.roi * 100).toFixed(1)}%</div>
+          <div class="sub">총 당첨금 ${f.won(r.prize)}</div></div>
+        <div class="card stat"><div class="label">실현 ROI — 최적화</div>
+          <div class="value down">${(o.roi * 100).toFixed(1)}%</div>
+          <div class="sub">총 당첨금 ${f.won(o.prize)}</div></div>
+      </div>
+      ${s.analytic_roi == null ? "" : `<div class="card stat">
+        <div class="label">해석적 기대 ROI — <b>두 방식 동일</b></div>
+        <div class="value">${(s.analytic_roi * 100).toFixed(1)}%</div>
+        <div class="sub">이 기간에 실제 지급된 등수별 상금과 확률로 계산한 값
+          (티켓당 ${f.won(s.analytic_return_per_ticket)} 회수).
+          등수별 당첨 확률이 두 방식에서 완전히 같으므로 이 값도 같습니다.
+          위의 실현 ROI가 이 값과 다른 것은 전부 운입니다.</div></div>`}
+      <div class="card table-scroll"><table>
+      <thead><tr><th>지표</th><th class="num">자동선택</th><th class="num">최적화</th>
+        <th class="num">변화</th></tr></thead><tbody>
+      <tr><td>회차당 "1개 이상 당첨" 비율</td><td class="num">${f.pct(r.any_rate, 1)}</td>
+        <td class="num">${f.pct(o.any_rate, 1)}</td>
+        <td class="num ${o.any_rate >= r.any_rate ? "up" : "down"}">${f.sign(o.any_rate / r.any_rate - 1)}</td></tr>
+      <tr><td>총 당첨 티켓 수</td><td class="num">${r.wins.toFixed(1)}장</td>
+        <td class="num">${o.wins.toFixed(0)}장</td>
+        <td class="num flat">기댓값 동일</td></tr>
+      <tr><td>평균 인기 배수</td><td class="num">${r.mean_multiplier.toFixed(3)}</td>
+        <td class="num">${o.mean_multiplier.toFixed(3)}</td>
+        <td class="num up">${f.sign(o.mean_multiplier / r.mean_multiplier - 1)}</td></tr>
+      </tbody></table>
+      <p class="hint"><b>실현 ROI 차이는 해석하지 마세요.</b> ${s.n_rounds}회차 표본에서는
+      3등 한 번이 나느냐 마느냐로 ROI가 10%p 넘게 흔들립니다. 두 방식의 등수별 당첨 확률은
+      전수 열거로 <b>완전히 동일함이 증명</b>되어 있으므로, 이 차이는 정의상 전부 운입니다.
+      의미 있는 것은 <b>인기 배수</b>이며, 이 값은 과거 데이터만 써서 만든 조합이
+      매 회차 일관되게 1보다 낮았음을 보여줍니다.
+      "1개 이상 당첨" 비율도 ±3%p 수준의 표본오차를 감안해서 보셔야 합니다.</p>
+      </div>`;
+  }).join(""));
+
+  // ---------------- 회차별 표 ----------------
+  const rows10 = bt.walk_forward["10"].rounds;
+  APP.set("rounds", `<div class="card table-scroll" style="max-height:460px;overflow-y:auto">
+    <table><thead><tr><th>회차</th><th class="num">최적화 당첨금</th><th class="num">최적화 당첨 장수</th>
+      <th class="num">자동선택 평균 당첨금</th><th class="num">자동선택 평균 장수</th>
+      <th class="num">인기 배수</th></tr></thead><tbody>
+    ${rows10.slice().reverse().map(r => `<tr>
+      <td class="mono">${r.draw_no}</td>
+      <td class="num${r.ours_prize > 0 ? " up" : ""}">${r.ours_prize ? f.won(r.ours_prize) : "-"}</td>
+      <td class="num">${r.ours_wins || "-"}</td>
+      <td class="num">${f.won(r.rand_prize)}</td>
+      <td class="num">${r.rand_wins.toFixed(2)}</td>
+      <td class="num">${r.ours_multiplier.toFixed(3)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <p class="hint">10장 기준. 대부분의 회차는 5등(5,000원) 한두 장이거나 전부 꽝입니다. 그것이 정상입니다.</p>`);
+
+  const s10 = bt.walk_forward["10"].summary;
+  const nTk = s10.n_rounds * 10;
+  APP.el("ntickets-note").textContent = f.int(nTk) + "장";
+  APP.el("nreps").textContent = s10.n_reps;
+  APP.el("jackpot-math").innerHTML =
+    `${s10.n_rounds}회차 × 10장 = ${f.int(nTk)}장을 샀을 때 1등이 한 번이라도 나올 확률은 ` +
+    `${f.int(nTk)} ÷ 8,145,060 = <b>약 ${(nTk / 8145060 * 100).toFixed(2)}%</b>입니다.`;
+
+  APP.set("footer", `데이터: ${meta.data_source} · ${meta.n_draws}회차 · 생성 ${meta.generated_at}`);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>원시 데이터 — 로또 6/45 조합 분석</title>
+<meta name="description" content="1회부터 최신 회차까지 전체 당첨번호, 등수별 당첨자 수, 당첨금, 판매액 원시 데이터.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%232a7fd4'/%3E%3Ctext x='16' y='22' font-size='16' font-weight='700' text-anchor='middle' fill='white' font-family='sans-serif'%3E45%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>원시 데이터</h1>
+  <p class="muted small" id="subtitle"></p>
+
+  <div id="stats"></div>
+
+  <h2>1등 당첨자 수 — 실제 ÷ 기대치</h2>
+  <p class="small">
+    판매량만 알면 1등 당첨자 수의 기댓값을 계산할 수 있습니다
+    (판매 티켓 수 ÷ 8,145,060). 실제 당첨자 수를 이 기댓값으로 나눈 값이 아래 그래프입니다.
+    <b>1.0보다 크면 그 회차 당첨번호를 사람들이 많이 골랐다는 뜻</b>이고,
+    작으면 아무도 안 고른 조합이 나왔다는 뜻입니다. 순수한 우연이라면 1.0 주위로만 흔들려야 하는데,
+    실제로는 조합의 성질에 따라 체계적으로 갈립니다.
+  </p>
+  <div class="card"><div id="chart"></div></div>
+
+  <h2>전체 회차</h2>
+  <div style="margin:10px 0">
+    <input id="q" type="search" placeholder="회차 번호 또는 당첨번호로 검색 (예: 1238, 또는 7 14 22)"
+      style="width:100%;max-width:460px;padding:9px 12px;border:1px solid var(--border);
+             border-radius:9px;background:var(--bg-card);color:var(--text);font:inherit">
+  </div>
+  <div id="table" class="loading">불러오는 중…</div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+(async () => {
+  APP.chrome("data.html");
+  const f = APP.fmt;
+  let d, meta;
+  try {
+    [meta, d] = await Promise.all([APP.load("meta.json"), APP.load("draws.json")]);
+  } catch (e) { APP.set("table", '<div class="err">' + e.message + '</div>'); return; }
+
+  const col = Object.fromEntries(d.columns.map((c, i) => [c, i]));
+  const rows = d.rows;
+  const M = meta.total_combinations;
+  const nums = r => [1, 2, 3, 4, 5, 6].map(i => r[col["n" + i]]);
+  // 게임 가격은 88회(2004-08-07)에 2,000원 -> 1,000원으로 인하됐다.
+  const price = r => (r[col.draw_no] < 88 ? 2000 : 1000);
+  const games = r => r[col.sales] / price(r);
+  const expectedJackpot = r => games(r) / M;
+  const ratio = r => (games(r) > 0 ? r[col.w1_winners] / expectedJackpot(r) : null);
+
+  APP.el("subtitle").innerHTML =
+    "1~" + meta.latest_draw + "회 (" + f.int(meta.n_draws) + "회차, " +
+    rows[0][col.date] + " ~ " + meta.latest_date + ") · 출처 " +
+    '<a href="https://github.com/smok95/lotto" target="_blank" rel="noopener">smok95/lotto</a> ' +
+    "(동행복권 공식 결과 미러, 실물 대조 검증 완료)";
+
+  // ------------------------------------------------------------ 요약 카드
+  const last = rows[rows.length - 1];
+  const recent = rows.slice(-52);
+  const recentGames = recent.reduce((a, r) => a + games(r), 0) / recent.length;
+  const totalSales = rows.reduce((a, r) => a + r[col.sales], 0);
+  const card = (label, value, sub, extra) =>
+    '<div class="card stat"><div class="label">' + label + '</div>' +
+    '<div class="value">' + value + '</div>' +
+    '<div class="sub">' + sub + '</div>' + (extra || "") + '</div>';
+  APP.set("stats", '<div class="grid grid-3">' +
+    card("최근 회차", meta.latest_draw + "회", meta.latest_date,
+         '<div style="margin-top:8px">' +
+         APP.balls(nums(last), { small: true, bonus: last[col.bonus] }) + '</div>') +
+    card("최근 1년 평균 판매", f.int(recentGames),
+         "게임(1,000원) · 1등 기대 당첨자 " + (recentGames / M).toFixed(1) + "명") +
+    card("누적 판매액", (totalSales / 1e12).toFixed(1) + "조원", "1회차부터 현재까지") +
+    '</div>');
+
+  // ------------------------------------------------- 산점도 (인라인 SVG)
+  (() => {
+    const pts = rows.filter(r => r[col.draw_no] >= 101 && ratio(r) != null)
+                    .map(r => [r[col.draw_no], ratio(r)]);
+    const W = 900, H = 260, PL = 44, PR = 12, PT = 12, PB = 26;
+    const xs = pts.map(p => p[0]);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const yMax = Math.min(3.0, Math.max(...pts.map(p => p[1])));
+    const X = v => PL + (v - x0) / (x1 - x0) * (W - PL - PR);
+    const Y = v => H - PB - Math.min(v, yMax) / yMax * (H - PT - PB);
+
+    const parts = [];
+    for (const v of [0, 0.5, 1, 1.5, 2, 2.5, 3]) {
+      if (v > yMax) continue;
+      const stroke = v === 1 ? "var(--text-dim)" : "var(--border)";
+      parts.push('<line x1="' + PL + '" y1="' + Y(v) + '" x2="' + (W - PR) +
+                 '" y2="' + Y(v) + '" stroke="' + stroke + '" stroke-width="1"/>');
+      parts.push('<text x="' + (PL - 7) + '" y="' + (Y(v) + 4) + '" text-anchor="end" ' +
+                 'font-size="10" fill="var(--text-faint)">' + v.toFixed(1) + '</text>');
+    }
+    for (const v of [200, 400, 600, 800, 1000, 1200]) {
+      if (v < x0 || v > x1) continue;
+      parts.push('<text x="' + X(v) + '" y="' + (H - 8) + '" text-anchor="middle" ' +
+                 'font-size="10" fill="var(--text-faint)">' + v + '</text>');
+    }
+    for (const pt of pts) {
+      parts.push('<circle cx="' + X(pt[0]).toFixed(1) + '" cy="' + Y(pt[1]).toFixed(1) +
+                 '" r="1.9" fill="' + (pt[1] > 1 ? "#e0503f" : "#2a7fd4") +
+                 '" fill-opacity=".55"/>');
+    }
+    APP.set("chart",
+      '<div class="table-scroll"><svg viewBox="0 0 ' + W + " " + H + '" width="100%" ' +
+      'style="min-width:640px;display:block" role="img" ' +
+      'aria-label="회차별 1등 당첨자 수 실제 대 기대 비율 산점도">' +
+      parts.join("") + '</svg></div>' +
+      '<p class="hint">101회 이후. 가로축 회차, 세로축 실제 ÷ 기대. ' +
+      '붉은 점은 기대보다 당첨자가 많았던 회차(= 인기 조합), ' +
+      '푸른 점은 적었던 회차(= 비인기 조합)입니다. ' +
+      '1등 당첨자 수 자체가 작아 점 하나하나는 흔들리지만, ' +
+      '이 흔들림의 상당 부분이 <b>우연이 아니라 조합의 인기도</b>로 설명됩니다.</p>');
+  })();
+
+  // ------------------------------------------------------------- 전체 표
+  const HEADER =
+    '<tr><th>회차</th><th style="text-align:left">날짜</th>' +
+    '<th style="text-align:left">당첨번호</th><th class="num">판매 게임수</th>' +
+    '<th class="num">1등 당첨자</th><th class="num">1등 기대치</th>' +
+    '<th class="num">실제÷기대</th><th class="num">1인당 당첨금</th>' +
+    '<th class="num">5등 당첨자</th></tr>';
+
+  function rowHTML(r) {
+    const rr = ratio(r);
+    const cls = rr > 1.15 ? " down" : rr < 0.85 ? " up" : "";
+    return '<tr>' +
+      '<td class="mono">' + r[col.draw_no] + '</td>' +
+      '<td style="text-align:left" class="mono tiny">' + r[col.date] + '</td>' +
+      '<td style="text-align:left">' +
+        APP.balls(nums(r), { small: true, bonus: r[col.bonus] }) + '</td>' +
+      '<td class="num">' + f.int(games(r)) + '</td>' +
+      '<td class="num">' + r[col.w1_winners] + '</td>' +
+      '<td class="num">' + expectedJackpot(r).toFixed(1) + '</td>' +
+      '<td class="num' + cls + '">' + (rr ? rr.toFixed(2) : "-") + '</td>' +
+      '<td class="num">' + (r[col.w1_prize] ? f.eok(r[col.w1_prize]) : "-") + '</td>' +
+      '<td class="num">' + f.int(r[col.w5_winners]) + '</td></tr>';
+  }
+
+  const LIMIT = 300;
+  function render(query) {
+    const terms = (query || "").trim().split(/\s+/).filter(Boolean);
+    let list = rows.slice().reverse();
+    if (terms.length) {
+      list = list.filter(r => {
+        const ns = nums(r).map(String);
+        return terms.every(t => String(r[col.draw_no]) === t || ns.includes(t) ||
+                                String(r[col.bonus]) === t);
+      });
+    }
+    const shown = list.slice(0, LIMIT);
+    const note = list.length > LIMIT
+      ? "검색 결과 " + f.int(list.length) + "건 중 최근 " + LIMIT + "건 표시."
+      : f.int(list.length) + "건.";
+    APP.set("table",
+      '<div class="card table-scroll" style="max-height:600px;overflow-y:auto">' +
+      '<table><thead>' + HEADER + '</thead><tbody>' +
+      shown.map(rowHTML).join("") + '</tbody></table></div>' +
+      '<p class="hint">' + note +
+      ' "실제÷기대"에서 <span class="up">파란색</span>은 당첨자가 기대보다 적었던' +
+      '(= 1인당 수령액이 컸던) 회차, <span class="down">붉은색</span>은 많았던 회차입니다.' +
+      ' 87회 이하는 게임당 2,000원, 88회부터 1,000원으로 계산했습니다.</p>');
+  }
+
+  render("");
+  let timer;
+  APP.el("q").addEventListener("input", e => {
+    clearTimeout(timer);
+    timer = setTimeout(() => render(e.target.value), 180);
+  });
+
+  APP.set("footer", "데이터: " + meta.data_source + " · " + meta.n_draws +
+    "회차 · 생성 " + meta.generated_at);
+})();
+</script>
+</body>
+</html>

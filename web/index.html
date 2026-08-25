@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>로또 6/45 조합 분석 — 추천 조합</title>
+<meta name="description" content="1238회 전체 데이터로 추정한 번호 인기도와 커버리지 최적화로 만든 로또 조합. 당첨 확률은 모두 같고, 당첨 시 수령액과 소액 당첨 확률만 개선합니다.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%232a7fd4'/%3E%3Ctext x='16' y='22' font-size='16' font-weight='700' text-anchor='middle' fill='white' font-family='sans-serif'%3E45%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div id="disclaimer"></div>
+  <div id="fresh"></div>
+
+  <h1 id="title">추천 조합</h1>
+  <p class="muted small" id="subtitle"></p>
+
+  <div style="margin:18px 0 6px">
+    <div class="toggle" id="size-toggle">
+      <button data-n="10" aria-pressed="true">10장</button>
+      <button data-n="20" aria-pressed="false">20장</button>
+    </div>
+  </div>
+
+  <div id="content" class="loading">계산 결과를 불러오는 중…</div>
+
+  <h2>이 포트폴리오가 실제로 바꾸는 것</h2>
+  <p class="small muted">
+    가능한 추첨 8,145,060가지를 <b>전부 열거</b>해 계산한 값입니다. 시뮬레이션 표본오차가 없습니다.
+  </p>
+  <div id="compare"></div>
+
+  <h2>번호별 인기도</h2>
+  <p class="small muted">
+    5등(3개 매칭) 당첨자 수는 회차당 약 160만 명이라 순수한 확률 오차가 0.08%에 불과한데,
+    실제로는 회차마다 4% 넘게 흔들립니다. 이 편차가 <b>사람들이 어떤 번호를 좋아하는지</b>를
+    알려줍니다. 아래는 그렇게 추정한 번호별 선택 가중치이며, 실제 로또 용지의 7열 배치 그대로입니다.
+    <b>붉을수록 사람들이 많이 고르는 번호</b>(당첨 시 나눠 가질 확률이 큼),
+    <b>푸를수록 덜 고르는 번호</b>입니다.
+  </p>
+  <div class="card" id="heatmap"></div>
+
+  <h2>어떤 조합이 인기 있는가</h2>
+  <p class="small muted">
+    아래는 회귀 계수가 아니라 <b>무작위 조합 30만 개를 직접 스코어링해 측정한 값</b>입니다.
+    (계수를 그대로 보여주면 서로 비슷한 것을 재는 특징들 때문에 부호가 뒤집혀 보일 수 있습니다.)
+    배수가 <b>1보다 크면 사람들이 많이 고르는 유형</b>이라 당첨 시 나눠 가질 사람이 많고,
+    <b>1보다 작으면 덜 고르는 유형</b>입니다.
+  </p>
+  <div id="factors"></div>
+
+  <h2>이 방식이 맞는지 어떻게 확인했나</h2>
+  <div id="validation"></div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script src="js/generator.js"></script>
+<script src="js/app.js"></script>
+<script>
+(async () => {
+  APP.chrome("index.html");
+  APP.set("disclaimer", APP.DISCLAIMER);
+  let rec, meta, pop;
+  try {
+    [meta, rec, pop] = await Promise.all([
+      APP.load("meta.json"), APP.load("recommendations.json"), APP.load("popularity.json"),
+    ]);
+  } catch (e) {
+    APP.set("content", `<div class="err">${e.message}</div>`);
+    return;
+  }
+
+  const f = APP.fmt;
+  document.getElementById("title").textContent = `${rec.target_draw}회 추천 조합`;
+  document.getElementById("subtitle").innerHTML =
+    `${rec.based_on_draw}회(${meta.latest_date})까지 <b>${f.int(meta.n_draws)}회차</b> 전체 데이터 기준 · ` +
+    `직전 당첨번호 ${rec.prev_numbers.join(", ")} · 생성 ${meta.generated_at.slice(0, 16).replace("T", " ")}`;
+
+  // ---- 최신 회차 폴백: Actions 가 아직 안 돌았는데 새 회차가 나온 경우 ----
+  const fresh = await APP.checkFresh(rec.based_on_draw);
+  let regenerated = null;
+  if (fresh) {
+    APP.set("fresh", `<div class="notice"><b>${fresh.draw_no}회 결과가 방금 확인되었습니다</b>
+      (${fresh.date} · ${fresh.numbers.join(", ")} + ${fresh.bonus}).
+      사전 계산된 추천은 ${rec.based_on_draw}회 기준이라 브라우저에서 다시 만들고 있습니다…</div>`);
+    const model = new LOTTO.Model(pop.model);
+    const prev1 = fresh.numbers, prev2 = rec.prev_numbers;
+    const pctOf = LOTTO.percentileSampler(model, prev1, prev2, 20000);
+    regenerated = {};
+    for (const n of [10, 20]) {
+      const tk = LOTTO.optimize(model, n, prev1, prev2, { seed: 1, collide: meta.collide });
+      regenerated[n] = tk.map(t => ({
+        numbers: t,
+        multiplier: model.multiplier(t, prev1, prev2),
+        percentile: pctOf(model.multiplier(t, prev1, prev2)),
+        expected_co_winners: rec.base_expected_jackpot_winners * model.multiplier(t, prev1, prev2),
+        notes: noteFor(t, prev1),
+      }));
+    }
+    document.getElementById("title").textContent = `${fresh.draw_no + 1}회 추천 조합`;
+    APP.set("fresh", `<div class="notice"><b>${fresh.draw_no}회 결과를 반영했습니다</b>
+      (${fresh.date} · ${fresh.numbers.join(", ")} + ${fresh.bonus}).
+      아래 추천은 브라우저에서 방금 다시 계산한 ${fresh.draw_no + 1}회용입니다.
+      인기도 모델과 검증 수치는 ${rec.based_on_draw}회까지 학습한 값을 그대로 씁니다
+      (1주일치 데이터로는 거의 변하지 않습니다).</div>`);
+  }
+
+  // build.py 의 describe() 와 같은 문구를 만든다.
+  function noteFor(t, prev1) {
+    const notes = [];
+    const hi = t.filter(v => v > 31).length;
+    if (hi >= 3) notes.push(`32~45번을 ${hi}개 포함 (생일로 고르기 힘든 구간)`);
+    else if (hi === 0) notes.push("전부 1~31 구간 — 생일 조합과 겹칠 수 있음");
+    const cp = LOTTO.combFeatures(t).consecutive_pairs;
+    if (cp) notes.push(`연속번호 ${cp}쌍 — 사람들은 번호를 흩뿌려 고르는 편이라 덜 선택됨`);
+    const ov = t.filter(v => prev1.includes(v)).length;
+    if (ov) notes.push(`직전 회차 번호 ${ov}개 포함 (피할 이유가 없음)`);
+    const total = t.reduce((a, b) => a + b, 0);
+    notes.push(total < 110 || total > 170
+      ? `번호 합 ${total} — 중앙(약 138)에서 벗어난 구간`
+      : `번호 합 ${total}`);
+    return notes;
+  }
+
+  // ------------------------------------------------------------ 티켓 렌더링
+  function renderTickets(n) {
+    const src = regenerated ? regenerated[n] : rec.by_size[String(n)].tickets;
+    const rows = src.map((t, i) => `
+      <div class="ticket">
+        <div class="ticket-no">${String(i + 1).padStart(2, "0")}</div>
+        <div>
+          ${APP.balls(t.numbers)}
+          <div class="ticket-notes">${t.notes.map(x => `<span>${x}</span>`).join("")}</div>
+        </div>
+        <div class="ticket-metric">
+          <b>${f.fix(t.multiplier, 2)}배</b>
+          인기도 하위 ${f.fix(t.percentile, 0)}%<br>
+          예상 동시당첨 ${f.fix(t.expected_co_winners, 1)}명
+        </div>
+      </div>`).join("");
+    const mean = src.reduce((a, t) => a + t.multiplier, 0) / src.length;
+    return `
+      <div class="card">
+        <div class="grid grid-3" style="margin-bottom:14px">
+          <div class="stat"><div class="label">평균 인기 배수</div>
+            <div class="value ${mean < 1 ? "up" : "down"}">${f.fix(mean, 3)}</div>
+            <div class="sub">1.00 = 평균적인 조합 · 낮을수록 당첨 시 덜 나눔</div></div>
+          <div class="stat"><div class="label">1등 당첨 확률</div>
+            <div class="value flat">${n} / 8,145,060</div>
+            <div class="sub">자동선택과 정확히 동일 (바꿀 수 없음)</div></div>
+          <div class="stat"><div class="label">구매 금액</div>
+            <div class="value">${f.won(n * 1000)}</div>
+            <div class="sub">기대 회수액 약 ${f.won(n * 500)} (-50%)</div></div>
+        </div>
+        ${rows}
+      </div>
+      <p class="hint">"인기도 하위 N%"는 무작위 조합 대비 백분위입니다. 0%에 가까울수록
+      남들이 고르지 않는 조합입니다. "예상 동시당첨"은 최근 판매량
+      (약 ${f.int(rec.assumed_tickets)}장) 기준으로 이 조합이 1등이 됐을 때 함께 당첨될 사람 수의 기댓값입니다.</p>`;
+  }
+
+  // ------------------------------------------------------------ 비교표
+  function renderCompare(n) {
+    const d = rec.by_size[String(n)];
+    const o = d.portfolio, b = d.random_baseline;
+    const row = (label, bv, ov, kind, note) => {
+      let cls = "flat", delta = "동일";
+      if (kind === "same") { delta = "정확히 동일"; }
+      else {
+        const r = ov / bv - 1;
+        cls = (kind === "up" ? r > 0 : r < 0) ? "up" : "down";
+        delta = f.sign(r, 1);
+      }
+      return `<tr><td>${label}</td><td class="num">${bv}</td><td class="num">${ov}</td>
+              <td class="num ${cls}">${delta}</td><td class="small muted" style="text-align:left">${note}</td></tr>`;
+    };
+    return `<div class="card table-scroll"><table>
+      <thead><tr><th>지표</th><th class="num">자동선택 ${n}장</th>
+        <th class="num">최적화 ${n}장</th><th class="num">변화</th>
+        <th style="text-align:left">의미</th></tr></thead><tbody>
+      ${row("1등 당첨 확률", o.p_jackpot.toExponential(4), o.p_jackpot.toExponential(4), "same",
+            "조합을 어떻게 골라도 바뀌지 않습니다. 이 값이 달라진다면 그건 버그입니다.")}
+      ${row("최소 1개 이상 당첨 확률", f.pct(b.p_any_prize), f.pct(o.p_any_prize), "up",
+            "티켓끼리 번호를 덜 겹치게 짜면 '전부 꽝'이 될 확률이 줄어듭니다.")}
+      ${row("평균 당첨 티켓 수", f.fix(b.mean_prizes, 5), f.fix(o.mean_prizes, 5), "same",
+            "기댓값은 바뀌지 않습니다. 바뀐 것은 분산뿐입니다.")}
+      ${row("평균 인기 배수", f.fix(b.mean_multiplier, 3), f.fix(o.mean_multiplier, 3), "down",
+            "1등 당첨 시 함께 당첨될 사람 수의 배수. 낮을수록 1인당 수령액이 큽니다.")}
+      ${row("티켓 간 평균 겹침", f.fix(b.mean_overlap, 2) + "개", f.fix(o.mean_overlap, 2) + "개", "down",
+            "겹침이 적을수록 당첨 기회가 서로 다른 추첨 결과에 분산됩니다.")}
+      ${row("사용한 서로 다른 번호", b.distinct_numbers + "개", o.distinct_numbers + "개", "up",
+            `${n}장이면 번호 슬롯이 ${n * 6}개인데 번호는 45개뿐이라 겹침을 0으로는 못 만듭니다.`)}
+      </tbody></table></div>`;
+  }
+
+  // ------------------------------------------------------------ 히트맵
+  function renderHeatmap() {
+    const beta = pop.model.beta;
+    const w = beta.map(Math.exp);
+    const lo = Math.min(...w), hi = Math.max(...w);
+    const cells = w.map((v, i) => {
+      const t = (v - lo) / (hi - lo || 1);              // 0=비인기, 1=인기
+      const bg = t < 0.5
+        ? `color-mix(in srgb, #2a7fd4 ${(1 - t * 2) * 55}%, var(--bg-soft))`
+        : `color-mix(in srgb, #e0503f ${(t - 0.5) * 2 * 55}%, var(--bg-soft))`;
+      return `<div class="slip-cell" style="background:${bg}" title="${i + 1}번 · 가중치 ${v.toFixed(3)}">
+                ${i + 1}<small>${v.toFixed(2)}</small></div>`;
+    }).join("");
+    const order = w.map((v, i) => [i + 1, v]).sort((a, b) => b[1] - a[1]);
+    const top = order.slice(0, 8), bot = order.slice(-8).reverse();
+    const b31 = w.slice(0, 31).reduce((a, b) => a + b, 0) / 31;
+    const b45 = w.slice(31).reduce((a, b) => a + b, 0) / 14;
+    return `
+      <div class="grid grid-2">
+        <div>
+          ${cells ? `<div class="slip">${cells}</div>` : ""}
+          <div class="legend"><span>덜 고름</span><span class="bar"></span><span>많이 고름</span></div>
+        </div>
+        <div>
+          <div class="stat" style="margin-bottom:14px">
+            <div class="label">생일 편향 (1~31 평균 ÷ 32~45 평균)</div>
+            <div class="value">${(b31 / b45).toFixed(3)}배</div>
+            <div class="sub">1보다 크면 날짜로 쓸 수 있는 번호를 더 많이 고른다는 뜻입니다.</div>
+          </div>
+          <p class="small"><b>가장 인기 있는 번호</b><br>
+            ${top.map(([n, v]) => `<span class="ball sm ${APP.ballClass(n)}" style="vertical-align:middle">${n}</span>`).join(" ")}
+            <span class="muted tiny">— 대부분 1~17. 생일·월(月)로 쓸 수 있는 구간입니다.</span></p>
+          <p class="small"><b>가장 인기 없는 번호</b><br>
+            ${bot.map(([n, v]) => `<span class="ball sm ${APP.ballClass(n)}" style="vertical-align:middle">${n}</span>`).join(" ")}
+            <span class="muted tiny">— 이 번호들로 당첨되면 나눠 가질 사람이 적습니다.</span></p>
+        </div>
+      </div>`;
+  }
+
+  // ------------------------------------------------------------ 검증 요약
+  function renderValidation() {
+    const e = pop.effect;
+    const rows = e.quartiles.map(q => {
+      const lab = { 1: "최저 (비인기)", 2: "2분위", 3: "3분위", 4: "최고 (인기)" }[q.quartile];
+      return `<tr><td>${lab}</td><td class="num">${q.n}</td>
+        <td class="num">${f.fix(q.pred_multiplier, 3)}</td>
+        <td class="num"><b>${f.fix(q.actual_over_expected, 3)}</b></td></tr>`;
+    }).join("");
+    const p = e.payout;
+    return `
+      <p class="small">
+        인기도 모델은 <b>4등·5등 당첨자 수만으로 학습</b>했고 <b>1등 데이터는 전혀 쓰지 않았습니다.</b>
+        그리고 ${e.split}회까지만 학습한 뒤, 한 번도 보지 않은 ${e.split + 1}~${meta.latest_draw}회
+        (${e.n_test}개 회차)에서 1등 당첨자 수를 실제로 맞히는지 확인했습니다.
+      </p>
+      <div class="card table-scroll"><table>
+        <thead><tr><th>모델이 예측한 인기도</th><th class="num">회차 수</th>
+          <th class="num">예측 배수</th><th class="num">실제 1등 당첨자 ÷ 기대치</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+        <p class="hint">모델이 "인기 없다"고 한 회차는 실제로 1등 당첨자가 기대보다 적게 나왔고,
+        "인기 있다"고 한 회차는 많이 나왔습니다. 예측이 무의미했다면 네 줄 모두 1.000 근처여야 합니다.
+        상관계수 r = ${f.fix(e.corr, 3)}, 순열검정 p = ${e.perm_p < 0.001 ? "0.001 미만" : f.fix(e.perm_p, 4)}.</p>
+      </div>
+      <div class="grid grid-2">
+        <div class="card stat">
+          <div class="label">실제 1등 수령액 — 모델이 <b>비인기</b>로 분류한 회차</div>
+          <div class="value up">${f.eok(p.unpopular_half.mean_prize)}</div>
+          <div class="sub">평균 ${f.fix(p.unpopular_half.mean_winners, 1)}명이 나눠 가짐 (${p.unpopular_half.n}개 회차)</div>
+        </div>
+        <div class="card stat">
+          <div class="label">실제 1등 수령액 — 모델이 <b>인기</b>로 분류한 회차</div>
+          <div class="value down">${f.eok(p.popular_half.mean_prize)}</div>
+          <div class="sub">평균 ${f.fix(p.popular_half.mean_winners, 1)}명이 나눠 가짐 (${p.popular_half.n}개 회차)</div>
+        </div>
+      </div>
+      <p class="small muted">
+        같은 1등이라도 <b>${f.fix(p.prize_ratio, 2)}배</b> 차이가 났습니다.
+        확률이 아니라 <b>나눠 갖는 사람 수</b>가 달랐기 때문입니다. 이것이 이 사이트가 하는 일의 전부입니다.
+      </p>`;
+  }
+
+  // ------------------------------------------------------------ 인기도 요인
+  function renderFactors() {
+    if (!rec.factors) return '<p class="muted small">요인 분석 데이터가 없습니다.</p>';
+    return rec.factors.factors.map(fac => {
+      const rows = fac.groups.map(g => {
+        const d = g.vs_overall;
+        const cls = d > 0.01 ? "down" : d < -0.01 ? "up" : "flat";
+        const w = Math.min(Math.abs(d) / 0.28 * 100, 100);
+        const bar = `<div style="height:7px;border-radius:4px;width:${w}%;
+          background:${d > 0 ? "#e0503f" : "#2a7fd4"};opacity:.7"></div>`;
+        return `<tr><td>${g.label}</td>
+          <td class="num">${g.multiplier.toFixed(3)}</td>
+          <td class="num ${cls}">${f.sign(d, 1)}</td>
+          <td style="width:40%">${bar}</td></tr>`;
+      }).join("");
+      return `<div class="card">
+        <h3 style="margin-top:0">${fac.name}</h3>
+        <p class="small muted" style="margin-bottom:10px">${fac.desc}</p>
+        <div class="table-scroll"><table><thead><tr>
+          <th style="text-align:left">구분</th><th class="num">평균 인기 배수</th>
+          <th class="num">전체 대비</th><th></th>
+        </tr></thead><tbody>${rows}</tbody></table></div>
+      </div>`;
+    }).join("");
+  }
+
+  function draw(n) {
+    APP.set("content", renderTickets(n));
+    APP.set("compare", renderCompare(n));
+  }
+
+  document.querySelectorAll("#size-toggle button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#size-toggle button")
+        .forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+      draw(Number(btn.dataset.n));
+    });
+  });
+
+  draw(10);
+  APP.set("heatmap", renderHeatmap());
+  APP.set("factors", renderFactors());
+  APP.set("validation", renderValidation());
+  APP.set("footer", `데이터: ${meta.data_source} · 동행복권 공식 결과와 대조 검증 ·
+    ${meta.n_draws}회차 (1~${meta.latest_draw}회) · 생성 ${meta.generated_at}`);
+})();
+</script>
+</body>
+</html>

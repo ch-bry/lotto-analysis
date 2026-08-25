@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>가설 검증 — 로또 6/45 조합 분석</title>
+<meta name="description" content="핫넘버, 콜드넘버, 궁합수 등 로또 통념 30개를 몬테카를로와 FDR 보정으로 전부 검정한 결과.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%232a7fd4'/%3E%3Ctext x='16' y='22' font-size='16' font-weight='700' text-anchor='middle' fill='white' font-family='sans-serif'%3E45%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>가설 검증 — 우리가 틀렸다고 확인한 것들</h1>
+  <p class="muted small" id="subtitle"></p>
+
+  <div class="notice">
+    <b>왜 이 페이지를 만들었나</b> —
+    로또 사이트들이 말하는 "핫넘버", "콜드넘버", "궁합수", "직전 회차 번호 제외" 같은 규칙을
+    전부 같은 방법으로 검정했습니다. 결과를 숨기지 않고 그대로 공개합니다.
+    <b>이 중 하나라도 통과했다면 추천에 반영했을 것이고, 통과하지 못했으므로 반영하지 않았습니다.</b>
+  </div>
+
+  <h2>검정 방법</h2>
+  <div class="card small">
+    <ol style="margin:0;padding-left:1.3em">
+      <li>실제 <span id="ndraws"></span>회차 데이터에서 각 가설의 검정통계량을 계산합니다.</li>
+      <li>균일한 6/45 추첨을 <span id="nsim"></span>회 시뮬레이션해 <b>귀무분포</b>를 만듭니다.
+          (해석적 공식 대신 시뮬레이션을 쓰는 이유: 워크포워드 통계량처럼 닫힌 형태로 쓸 수 없는
+          것이 많고, 회차 순서 구조까지 보존해야 하기 때문입니다.)</li>
+      <li>실제 통계량이 그 분포에서 얼마나 극단적인지로 <b>p값</b>을 냅니다.</li>
+      <li><b>Benjamini-Hochberg FDR 보정</b>을 적용합니다.
+          가설을 30개 검정하면 아무 효과가 없어도 <b>평균 1.5개</b>는 우연히 p&lt;0.05가 나옵니다.
+          이 보정을 건너뛰면 우연을 발견으로 착각하게 됩니다.</li>
+    </ol>
+  </div>
+
+  <div id="summary"></div>
+
+  <h2>가설별 결과</h2>
+  <p class="small muted">p값 오름차순. <span class="pill ok">FDR 통과</span>가 하나라도 있으면
+     그 가설은 실제 예측력이 있다는 뜻입니다.</p>
+  <div id="table" class="loading">불러오는 중…</div>
+
+  <h2>거짓양성 통제 확인</h2>
+  <p class="small">
+    이 파이프라인이 "아무 데서나 신호를 찾아내는" 도구가 아닌지 검증했습니다.
+    <b>균일 난수로 만든 가짜 회차 이력</b>에 똑같은 30개 가설을 전부 돌렸습니다.
+    진짜 신호가 있을 수 없는 데이터이므로 FDR 통과는 0개여야 정상입니다.
+  </p>
+  <div id="fpcheck"></div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+(async () => {
+  APP.chrome("hypotheses.html");
+  const f = APP.fmt;
+  let h, meta, bt;
+  try {
+    [meta, h, bt] = await Promise.all([
+      APP.load("meta.json"), APP.load("hypotheses.json"), APP.load("backtest.json")]);
+  } catch (e) { APP.set("table", `<div class="err">${e.message}</div>`); return; }
+
+  APP.el("subtitle").innerHTML =
+    `${f.int(h.n_draws)}회차 (1~${meta.latest_draw}회) · 몬테카를로 ${f.int(h.n_sim)}회 · Benjamini-Hochberg FDR 보정`;
+  APP.el("ndraws").textContent = f.int(h.n_draws);
+  APP.el("nsim").textContent = f.int(h.n_sim);
+
+  const res = h.results.slice().sort((a, b) => a.p - b.p);
+  const raw = res.filter(r => r.raw_sig).length;
+  const fdr = res.filter(r => r.fdr_sig).length;
+
+  APP.set("summary", `
+    <div class="grid grid-3" style="margin-top:16px">
+      <div class="card stat"><div class="label">검정한 가설</div>
+        <div class="value">${res.length}개</div>
+        <div class="sub">핫/콜드넘버, 궁합수, 합계, 홀짝, 연속수 등</div></div>
+      <div class="card stat"><div class="label">보정 전 p &lt; 0.05</div>
+        <div class="value ${raw > res.length * 0.05 * 2 ? "warn" : "flat"}">${raw}개</div>
+        <div class="sub">아무 효과가 없어도 우연히 ${(res.length * 0.05).toFixed(1)}개는 나옵니다</div></div>
+      <div class="card stat"><div class="label">FDR 보정 후 생존</div>
+        <div class="value ${fdr ? "up" : "flat"}">${fdr}개</div>
+        <div class="sub">${fdr === 0
+          ? "번호 예측 가설 중 살아남은 것이 없습니다"
+          : "실제 예측력이 있을 수 있습니다 — 아래 표 확인"}</div></div>
+    </div>
+    ${fdr === 0 ? `<div class="notice"><b>결론</b> — ${res.length}개 통념 중
+      <b>단 하나도</b> 다중검정 보정을 통과하지 못했습니다.
+      즉 <b>어떤 번호가 다음에 나올지는 예측할 수 없습니다.</b>
+      이것은 이 프로젝트의 실패가 아니라 출발점입니다. 번호를 못 맞히기 때문에,
+      대신 <a href="index.html">당첨됐을 때 받는 금액</a>을 키우는 쪽으로 갑니다.</div>` : ""}`);
+
+  APP.set("table", `<div class="card table-scroll"><table>
+    <thead><tr>
+      <th>ID</th><th style="text-align:left">가설</th>
+      <th style="text-align:left">주장</th>
+      <th class="num">통계량</th><th class="num">p값</th><th class="num">q값 (FDR)</th><th>판정</th>
+    </tr></thead><tbody>
+    ${res.map(r => `<tr>
+      <td class="mono tiny">${r.id}</td>
+      <td><b>${r.title}</b></td>
+      <td class="small muted" style="text-align:left;white-space:normal;max-width:340px">${r.claim}</td>
+      <td class="num">${r.statistic.toFixed(4)}</td>
+      <td class="num">${r.p < 0.0002 ? "&lt;0.0002" : r.p.toFixed(4)}</td>
+      <td class="num">${r.q >= 0.9999 ? "1.0000" : r.q.toFixed(4)}</td>
+      <td>${r.fdr_sig ? '<span class="pill ok">FDR 통과</span>'
+            : r.raw_sig ? '<span class="pill warn">보정 전만 유의</span>'
+            : '<span class="pill no">효과 없음</span>'}</td>
+    </tr>`).join("")}
+    </tbody></table>
+    <p class="hint">q값은 FDR 보정된 p값입니다. q ≤ 0.05 여야 "발견"으로 인정합니다.
+    "보정 전만 유의"는 <b>다중검정의 부산물일 가능성이 높다</b>는 뜻입니다.</p>
+    </div>`);
+
+  const fp = bt.false_positive_check;
+  APP.set("fpcheck", `<div class="grid grid-3">
+    <div class="card stat"><div class="label">가짜 데이터에서 보정 전 p&lt;0.05</div>
+      <div class="value">${fp.raw_significant}개</div>
+      <div class="sub">우연 기대치 ${fp.expected_raw_by_chance.toFixed(1)}개</div></div>
+    <div class="card stat"><div class="label">가짜 데이터에서 FDR 생존</div>
+      <div class="value ${fp.fdr_significant === 0 ? "up" : "down"}">${fp.fdr_significant}개</div>
+      <div class="sub">${fp.fdr_significant === 0
+        ? "정상 — 없는 신호를 만들어내지 않습니다" : "비정상 — 파이프라인 점검 필요"}</div></div>
+    <div class="card stat"><div class="label">검정한 가설</div>
+      <div class="value">${fp.n_hypotheses}개</div>
+      <div class="sub">실제 데이터와 동일한 파이프라인</div></div>
+  </div>`);
+
+  APP.set("footer", `데이터: ${meta.data_source} · ${meta.n_draws}회차 · 생성 ${meta.generated_at}`);
+})();
+</script>
+</body>
+</html>
