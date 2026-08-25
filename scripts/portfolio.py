@@ -230,7 +230,7 @@ def main():
     df = pd.read_csv(ROOT / "data" / "draws.csv")
     model = load_model()
     nxt = int(df.draw_no.max()) + 1
-    prev = P.prev_draws(df, [int(df.draw_no.max())])[0]
+    prev = P.prev_draws(df, [int(df.draw_no.max()) + 1])[0]   # 다음 회차 기준
 
     collide = collide_table()
     print("두 티켓이 번호를 k개 공유할 때 '둘 다 당첨'될 확률")

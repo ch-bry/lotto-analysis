@@ -125,7 +125,13 @@ def popularity_factors(model, prev, *, n=300_000, seed=13):
 
 def build_recommendations(df, model, ns=(10, 20), seed=1):
     latest = int(df.draw_no.max())
-    prev = P.prev_draws(df, [latest])[0]
+    target = latest + 1
+    # 예측 대상은 target 회차이므로 직전 회차는 latest 다. prev_draws 에 latest 를
+    # 넘기면 latest-1 이 나와 한 회차씩 밀린다.
+    prev = P.prev_draws(df, [target])[0]
+    assert prev[0].tolist() == sorted(
+        df[df.draw_no == latest][[f"n{i}" for i in range(1, 7)]].to_numpy()[0].tolist()), \
+        "직전 회차가 최신 회차와 다르다"
     rng = np.random.default_rng(7)
     sample = np.argsort(rng.random((PCTL_SAMPLE, F.N_MAX)), axis=1)[:, :F.PICK] + 1
     pct = model.multiplier(sample, prev)
@@ -146,7 +152,7 @@ def build_recommendations(df, model, ns=(10, 20), seed=1):
             "random_baseline": rnd,
         }
     return {
-        "target_draw": latest + 1,
+        "target_draw": target,
         "based_on_draw": latest,
         "prev_numbers": [int(v) for v in prev[0]],
         "assumed_tickets": recent_tickets,
@@ -206,7 +212,7 @@ def main():
           f"FDR 생존: {sum(h['fdr_sig'] for h in hyp)}개")
 
     print(f"\n[4/6] 백테스트")
-    prev = P.prev_draws(df, [latest])[0]
+    prev = P.prev_draws(df, [latest + 1])[0]      # 다음 회차 기준
     mc = {str(n): BT.exact_compare(model, prev, n) for n in (10, 20)}
     for n, r in mc.items():
         o, b = r["optimized"], r["random"]

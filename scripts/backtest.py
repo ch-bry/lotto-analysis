@@ -209,7 +209,7 @@ def main():
     quick = "--quick" in sys.argv
     df = pd.read_csv(ROOT / "data" / "draws.csv")
     model = load_model()
-    prev = P.prev_draws(df, [int(df.draw_no.max())])[0]
+    prev = P.prev_draws(df, [int(df.draw_no.max()) + 1])[0]   # 다음 회차 기준
 
     print("=" * 92)
     print("검증 4 — 포트폴리오 전수 열거 (표본오차 0)")

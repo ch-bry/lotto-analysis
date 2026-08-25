@@ -221,13 +221,19 @@ class PopularityModel:
 # ---------------------------------------------------------------------- 학습
 
 def prev_draws(full: pd.DataFrame, draw_nos) -> np.ndarray:
-    """각 회차의 직전 1·2회차 당첨번호 (T, 2, 6). 1·2회차는 자기 자신으로 채운다."""
+    """각 대상 회차의 직전 1·2회차 당첨번호 (T, 2, 6).
+
+    draw_nos 는 '예측 대상' 회차다. 아직 추첨되지 않은 다음 회차(latest+1)를
+    넘겨도 되며, 이 경우 직전 회차는 latest 가 된다.
+    1·2회차처럼 과거가 없는 경우는 가장 오래된 회차로 채운다.
+    """
     cols = [f"n{i}" for i in range(1, 7)]
     by_no = {int(r.draw_no): r[cols].to_numpy(np.int64) for _, r in full.iterrows()}
+    oldest = by_no[min(by_no)]
     out = np.empty((len(draw_nos), 2, PICK), dtype=np.int64)
     for i, no in enumerate(draw_nos):
         for j, back in enumerate((1, 2)):
-            out[i, j] = by_no.get(int(no) - back, by_no[int(no)])
+            out[i, j] = by_no.get(int(no) - back, oldest)
     return out
 
 
