@@ -342,6 +342,9 @@ def bh_fdr(pvals, alpha=0.05):
 
 #: 시뮬레이션 참조 분포의 고정 시드. 워커마다 동일한 기준분포를 써야 한다.
 REF_SEED = 20240101
+#: 시뮬레이션을 나눌 작업 개수. 실행 머신의 코어 수와 무관하게 고정해야
+#: 어디서 돌리든 같은 p값이 나온다. 워커 수는 이와 별개로 코어 수에 맞춘다.
+N_JOBS = 12
 
 
 def _null_batch(job):
@@ -371,8 +374,10 @@ def run(df, *, n_sim=10_000, seed=1, verbose=True, workers=None):
     H = build_hypotheses(build_reference(np.random.default_rng(REF_SEED)))
     observed = np.array([h.fn(W, ctx) for h in H])
 
+    # 작업 분할은 코어 수와 무관하게 고정한다. 워커 수에 따라 쪼개면 12코어
+    # 노트북과 4코어 CI 러너가 서로 다른 난수열을 써서 p값이 달라진다.
     workers = workers if workers is not None else max(1, (os.cpu_count() or 2) - 1)
-    n_job = min(workers, max(1, n_sim))
+    n_job = min(N_JOBS, max(1, n_sim))
     sizes = [n_sim // n_job + (1 if i < n_sim % n_job else 0) for i in range(n_job)]
     jobs = [(seed * 1000 + i, sz, observed, T, months)
             for i, sz in enumerate(sizes) if sz > 0]
