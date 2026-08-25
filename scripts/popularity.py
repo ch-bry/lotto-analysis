@@ -69,16 +69,16 @@ POP_FEATURES = [
 CONTEXT_FEATURES = ["prev_overlap", "prev2_overlap", "prev_neighbor"]
 
 
-def context_matrix(combos, prev_draws) -> np.ndarray:
+def context_matrix(combos, prev) -> np.ndarray:
     """(N, 3) 직전 회차 의존 특징.
 
-    prev_draws: (N, 3, 6) — 각 조합에 대응하는 직전 1·2회차 당첨번호와
-    직전 회차 번호(이웃 계산용).
+    prev: (N, 2, 6) — 각 조합에 대응하는 직전 1회차, 2회차 당첨번호.
+    돌려주는 열은 CONTEXT_FEATURES 순서와 같다.
     """
     a = F.as_array(combos).astype(np.int64)
     n = len(a)
     out = np.zeros((n, 3))
-    p1, p2 = prev_draws[:, 0, :], prev_draws[:, 1, :]
+    p1, p2 = prev[:, 0, :], prev[:, 1, :]
     m1 = np.zeros((n, N_MAX + 2), dtype=bool)
     np.put_along_axis(m1, p1, True, axis=1)
     m2 = np.zeros((n, N_MAX + 2), dtype=bool)
@@ -259,11 +259,28 @@ def _design(df, full, names, feat_mean, feat_std, divisions, *, n_sample, rng):
     return np.vstack(Xs), np.concatenate(ys), np.concatenate(vs)
 
 
-#: 홀드아웃(900/1000/1100 분할)으로 튜닝한 기본값. 릿지는 이 구간에서 평평하다.
-DEFAULTS = dict(divisions=(3, 4, 5), l2_beta=1e-3, l2_gamma=1e-3,
-                n_sample=4000, var_floor=1e-3)
+#: 합 0 제약을 위한 기저. beta 의 자유도는 45가 아니라 44이므로 마지막 성분을
+#: 나머지의 음수합으로 둔다.
+_SUM_ZERO = np.vstack([np.eye(N_MAX - 1), -np.ones((1, N_MAX - 1))])
 
 
+def _ridge(X, y, pvar, l2_beta, l2_gamma, var_floor):
+    """가중 릿지 회귀. (beta, gamma) 반환.
+
+    가중치는 1/(포아송 분산 + 하한). 관측 잡음보다 모델 오차가 지배적이라
+    하한이 없으면 5등(잡음 0.08%)이 회귀를 독점한다.
+    """
+    w = 1.0 / (pvar + var_floor)
+    Z = np.hstack([X[:, :N_MAX] @ _SUM_ZERO, X[:, N_MAX:]])
+    ng = Z.shape[1] - (N_MAX - 1)
+    pen = np.diag(np.concatenate([np.full(N_MAX - 1, l2_beta), np.full(ng, l2_gamma)]))
+    Zw = Z * np.sqrt(w)[:, None]
+    coef = np.linalg.solve(Zw.T @ Zw + pen * len(y), Zw.T @ (y * np.sqrt(w)))
+    return _SUM_ZERO @ coef[:N_MAX - 1], coef[N_MAX - 1:]
+
+
+#: 아래 기본값(l2, n_sample, var_floor)은 900/1000/1100 분할 홀드아웃으로
+#: 튜닝했다. 릿지 계수는 1e-3 ~ 1e-6 구간에서 성능이 평평하다.
 def fit(df, *, train_from=TRAIN_FROM, train_to=None, names=None,
         divisions=(3, 4, 5), l2_beta=1e-3, l2_gamma=1e-3, n_sample=4000,
         var_floor=1e-3, seed=0, moments=None):
@@ -276,22 +293,7 @@ def fit(df, *, train_from=TRAIN_FROM, train_to=None, names=None,
 
     X, y, pvar = _design(d, df, names, feat_mean, feat_std, divisions,
                          n_sample=n_sample, rng=rng)
-    # 관측 잡음(포아송)보다 모델 오차가 지배적이므로 분산 하한을 둔다.
-    w = 1.0 / (pvar + var_floor)
-    nb, ng = N_MAX, len(names) + len(CONTEXT_FEATURES)
-
-    # 합 0 제약: beta 의 자유도는 44. 마지막 성분을 나머지의 음수합으로 둔다.
-    Bc = np.vstack([np.eye(nb - 1), -np.ones((1, nb - 1))])
-    Z = np.hstack([X[:, :nb] @ Bc, X[:, nb:]])
-
-    pen = np.diag(np.concatenate([np.full(nb - 1, l2_beta), np.full(ng, l2_gamma)]))
-    Zw = Z * np.sqrt(w)[:, None]
-    A = Zw.T @ Zw + pen * len(y)
-    b = Zw.T @ (y * np.sqrt(w))
-    coef = np.linalg.solve(A, b)
-
-    beta = Bc @ coef[:nb - 1]
-    gamma = coef[nb - 1:]
+    beta, gamma = _ridge(X, y, pvar, l2_beta, l2_gamma, var_floor)
     return PopularityModel(beta, gamma, names, feat_mean, feat_std,
                            (train_from, train_to),
                            {"divisions": list(divisions), "l2_beta": l2_beta,
@@ -327,24 +329,17 @@ class DesignCache:
             self.blocks[k] = {"X": np.hstack([C_K[k] * onehot, g]),
                               "y": np.log(np.maximum(counts[k], 0.5) / exp),
                               "pvar": 1.0 / exp}
-        self._Bc = np.vstack([np.eye(N_MAX - 1), -np.ones((1, N_MAX - 1))])
 
     def fit(self, train_to, *, divisions=(3, 4, 5), l2_beta=1e-3, l2_gamma=1e-3,
             var_floor=1e-3) -> PopularityModel:
         m = self.draw_no <= train_to
-        Zs, ys, ws = [], [], []
-        for k in divisions:
-            B = self.blocks[k]
-            Zs.append(np.hstack([B["X"][m, :N_MAX] @ self._Bc, B["X"][m, N_MAX:]]))
-            ys.append(B["y"][m])
-            ws.append(1.0 / (B["pvar"][m] + var_floor))
-        Z, y, w = np.vstack(Zs), np.concatenate(ys), np.concatenate(ws)
-        ng = Z.shape[1] - (N_MAX - 1)
-        pen = np.diag(np.concatenate([np.full(N_MAX - 1, l2_beta), np.full(ng, l2_gamma)]))
-        Zw = Z * np.sqrt(w)[:, None]
-        coef = np.linalg.solve(Zw.T @ Zw + pen * len(y), Zw.T @ (y * np.sqrt(w)))
-        return PopularityModel(self._Bc @ coef[:N_MAX - 1], coef[N_MAX - 1:], self.names,
-                               self.feat_mean, self.feat_std, (self.train_from, train_to),
+        Xs = [self.blocks[k]["X"][m] for k in divisions]
+        ys = [self.blocks[k]["y"][m] for k in divisions]
+        vs = [self.blocks[k]["pvar"][m] for k in divisions]
+        beta, gamma = _ridge(np.vstack(Xs), np.concatenate(ys), np.concatenate(vs),
+                             l2_beta, l2_gamma, var_floor)
+        return PopularityModel(beta, gamma, self.names, self.feat_mean, self.feat_std,
+                               (self.train_from, train_to),
                                {"divisions": list(divisions), "l2_beta": l2_beta,
                                 "l2_gamma": l2_gamma, "cached": True})
 
