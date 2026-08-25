@@ -170,6 +170,71 @@ def random_tickets(n_tickets, rng):
 
 # ------------------------------------------------------------------ 정확 계산
 
+def exact_evaluate_many(portfolios, model=None, prev=None, *, chunk=400_000):
+    """여러 포트폴리오를 한 번의 전수 열거로 함께 평가한다.
+
+    8,145,060가지를 포트폴리오마다 따로 도는 대신 티켓을 모두 이어붙여 한 번만
+    돈다. 무작위 기준선을 여러 번 뽑아 평균낼 때 필요하다 — 무작위 포트폴리오
+    하나만 쓰면 그 하나의 운이 기준선이 되어 버린다.
+    """
+    tks = [np.asarray(t, dtype=np.int64) for t in portfolios]
+    sizes = [len(t) for t in tks]
+    flat = np.vstack(tks)
+    bounds = np.cumsum([0] + sizes)
+    allc = F.all_combinations(np.int8)
+    total = len(allc)
+
+    stats = [{"any": 0, "jack": 0, "prizes": 0, "fixed": 0} for _ in tks]
+    for s0 in range(0, total, chunk):
+        block = allc[s0:s0 + chunk].astype(np.int64)
+        c = len(block)
+        dm = np.zeros((c, N_MAX + 1), dtype=bool)
+        np.put_along_axis(dm, block, True, axis=1)
+        matches = dm[:, flat].sum(axis=2)                  # (c, 총 티켓 수)
+        for i in range(len(tks)):
+            m = matches[:, bounds[i]:bounds[i + 1]]
+            prized = m >= 3
+            st = stats[i]
+            st["any"] += int(prized.any(axis=1).sum())
+            st["jack"] += int((m == PICK).any(axis=1).sum())
+            st["prizes"] += int(prized.sum())
+            st["fixed"] += int((m == 3).sum()) * 5_000 + int((m == 4).sum()) * 50_000
+
+    out = []
+    for tk, st in zip(tks, stats):
+        n = len(tk)
+        r = {
+            "exact": True, "n_tickets": n,
+            "distinct_tickets": int(len({tuple(t) for t in tk.tolist()})),
+            "p_any_prize": st["any"] / total,
+            "p_jackpot": st["jack"] / total,
+            "mean_prizes": st["prizes"] / total,
+            "mean_fixed_prize": st["fixed"] / total,
+            "mean_overlap": float(_overlap_matrix(tk)[np.triu_indices(n, 1)].mean()),
+            "distinct_numbers": int(len(np.unique(tk))),
+        }
+        if model is not None:
+            mult = model.multiplier(tk, prev)
+            r["mean_multiplier"] = float(mult.mean())
+            r["payout_index"] = float((1.0 / mult).mean())
+        out.append(r)
+    return out
+
+
+def random_baseline(model, prev, n_tickets, *, reps=10, seed=5):
+    """자동선택 기준선. 무작위 포트폴리오 reps 개를 전수 열거해 평균낸다."""
+    rng = np.random.default_rng(seed)
+    rs = exact_evaluate_many([random_tickets(n_tickets, rng) for _ in range(reps)],
+                             model, prev)
+    keys = ["p_any_prize", "p_jackpot", "mean_prizes", "mean_fixed_prize",
+            "mean_overlap", "mean_multiplier", "payout_index"]
+    out = {k: float(np.mean([r[k] for r in rs])) for k in keys if k in rs[0]}
+    out.update(exact=True, n_tickets=n_tickets, reps=reps,
+               distinct_numbers=int(np.mean([r["distinct_numbers"] for r in rs])),
+               p_any_prize_sd=float(np.std([r["p_any_prize"] for r in rs])))
+    return out
+
+
 def exact_evaluate(tickets, model=None, prev=None, *, chunk=400_000):
     """가능한 추첨 8,145,060가지를 전부 열거해 성능을 정확히 계산한다.
 
@@ -240,7 +305,6 @@ def main():
     print(f"   번호가 안 겹치면 당첨번호 6개가 두 티켓에 나뉘어 '둘 다 당첨'이")
     print(f"   어려워지기 때문이다. 그만큼 '적어도 하나 당첨'은 올라간다.)")
 
-    rng = np.random.default_rng(42)
     print(f"\n{nxt}회 포트폴리오 — 가능한 추첨 8,145,060가지 전수 열거 (표본오차 0)")
     print("=" * 100)
     print(f"{'구성':<24}{'P(1등)':>14}{'P(1개이상 당첨)':>17}{'평균 당첨수':>12}"
@@ -248,9 +312,8 @@ def main():
     print("-" * 100)
     for n in (10, 20):
         tk, _ = optimize(model, n, prev, seed=1)
-        base = random_tickets(n, rng)
-        for label, t in (("자동선택 랜덤", base), ("최적화 포트폴리오", tk)):
-            r = exact_evaluate(t, model, prev)
+        for label, r in (("자동선택 (10회 평균)", random_baseline(model, prev, n)),
+                         ("최적화 포트폴리오", exact_evaluate(tk, model, prev))):
             print(f"{f'{n}장 {label}':<24}{r['p_jackpot']:>14.9f}{r['p_any_prize']:>17.5f}"
                   f"{r['mean_prizes']:>12.5f}{r['mean_multiplier']:>14.3f}"
                   f"{r['mean_overlap']:>10.3f}")

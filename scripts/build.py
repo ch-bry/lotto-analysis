@@ -144,8 +144,7 @@ def build_recommendations(df, model, ns=(10, 20), seed=1):
     for n in ns:
         tk, _ = PF.optimize(model, n, prev, seed=seed, collide=collide)
         ev = PF.exact_evaluate(tk, model, prev)
-        rnd = PF.exact_evaluate(PF.random_tickets(n, np.random.default_rng(seed)),
-                                model, prev)
+        rnd = PF.random_baseline(model, prev, n, seed=5)   # backtest 와 동일 기준선
         out[str(n)] = {
             "tickets": [describe(t, prev, model, pct, base_winners) for t in tk],
             "portfolio": ev,

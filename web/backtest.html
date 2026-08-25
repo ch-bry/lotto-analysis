@@ -83,12 +83,14 @@
     const same = Math.abs(o.p_jackpot - b.p_jackpot) < 1e-15;
     return `<h3>${n}장 구매 시</h3>
       <div class="card table-scroll"><table>
-      <thead><tr><th>지표</th><th class="num">자동선택</th><th class="num">최적화</th>
-        <th class="num">변화</th></tr></thead><tbody>
+      <thead><tr><th>지표</th>
+        <th class="num">자동선택<br><span class="tiny muted" style="font-weight:400">(무작위 ${b.reps || 1}개 평균)</span></th>
+        <th class="num">최적화</th><th class="num">변화</th></tr></thead><tbody>
       <tr><td>1등 당첨 확률</td><td class="num">${b.p_jackpot.toExponential(4)}</td>
         <td class="num">${o.p_jackpot.toExponential(4)}</td>
         <td class="num ${same ? "flat" : "down"}">${same ? "정확히 동일" : "불일치 — 버그"}</td></tr>
-      <tr><td>최소 1개 이상 당첨 확률</td><td class="num">${f.pct(b.p_any_prize, 3)}</td>
+      <tr><td>최소 1개 이상 당첨 확률</td><td class="num">${f.pct(b.p_any_prize, 3)}${
+        b.p_any_prize_sd ? ` ±${f.pct(b.p_any_prize_sd, 3)}` : ""}</td>
         <td class="num">${f.pct(o.p_any_prize, 3)}</td>
         <td class="num up">${f.sign(o.p_any_prize / b.p_any_prize - 1)}</td></tr>
       <tr><td>평균 당첨 티켓 수</td><td class="num">${b.mean_prizes.toFixed(5)}</td>

@@ -166,33 +166,44 @@
   function renderCompare(n) {
     const d = rec.by_size[String(n)];
     const o = d.portfolio, b = d.random_baseline;
-    const row = (label, bv, ov, kind, note) => {
+    // bv/ov 는 이미 포맷된 문자열일 수 있으므로 변화율은 raw 값으로 따로 넘긴다.
+    const row = (label, bv, ov, kind, note, raw) => {
       let cls = "flat", delta = "동일";
       if (kind === "same") { delta = "정확히 동일"; }
       else {
-        const r = ov / bv - 1;
+        const r = raw ? raw[1] / raw[0] - 1 : Number(ov) / Number(bv) - 1;
         cls = (kind === "up" ? r > 0 : r < 0) ? "up" : "down";
         delta = f.sign(r, 1);
       }
       return `<tr><td>${label}</td><td class="num">${bv}</td><td class="num">${ov}</td>
               <td class="num ${cls}">${delta}</td><td class="small muted" style="text-align:left">${note}</td></tr>`;
     };
+    const reps = b.reps ? `무작위 ${b.reps}개 평균` : "무작위 1개";
     return `<div class="card table-scroll"><table>
-      <thead><tr><th>지표</th><th class="num">자동선택 ${n}장</th>
+      <thead><tr><th>지표</th><th class="num">자동선택 ${n}장<br>
+        <span class="tiny muted" style="font-weight:400">(${reps})</span></th>
         <th class="num">최적화 ${n}장</th><th class="num">변화</th>
         <th style="text-align:left">의미</th></tr></thead><tbody>
       ${row("1등 당첨 확률", o.p_jackpot.toExponential(4), o.p_jackpot.toExponential(4), "same",
             "조합을 어떻게 골라도 바뀌지 않습니다. 이 값이 달라진다면 그건 버그입니다.")}
-      ${row("최소 1개 이상 당첨 확률", f.pct(b.p_any_prize), f.pct(o.p_any_prize), "up",
-            "티켓끼리 번호를 덜 겹치게 짜면 '전부 꽝'이 될 확률이 줄어듭니다.")}
+      ${row("최소 1개 이상 당첨 확률",
+            f.pct(b.p_any_prize) + (b.p_any_prize_sd ? ` ±${f.pct(b.p_any_prize_sd, 2)}` : ""),
+            f.pct(o.p_any_prize), "up",
+            "티켓끼리 번호를 덜 겹치게 짜면 '전부 꽝'이 될 확률이 줄어듭니다. " +
+            (b.p_any_prize_sd
+              ? `무작위 포트폴리오끼리의 편차(±${f.pct(b.p_any_prize_sd, 2)})보다 큰 차이입니다.`
+              : ""), [b.p_any_prize, o.p_any_prize])}
       ${row("평균 당첨 티켓 수", f.fix(b.mean_prizes, 5), f.fix(o.mean_prizes, 5), "same",
-            "기댓값은 바뀌지 않습니다. 바뀐 것은 분산뿐입니다.")}
+            "기댓값은 바뀌지 않습니다. 바뀐 것은 분산뿐입니다.", [b.mean_prizes, o.mean_prizes])}
       ${row("평균 인기 배수", f.fix(b.mean_multiplier, 3), f.fix(o.mean_multiplier, 3), "down",
-            "1등 당첨 시 함께 당첨될 사람 수의 배수. 낮을수록 1인당 수령액이 큽니다.")}
+            "1등 당첨 시 함께 당첨될 사람 수의 배수. 낮을수록 1인당 수령액이 큽니다.",
+            [b.mean_multiplier, o.mean_multiplier])}
       ${row("티켓 간 평균 겹침", f.fix(b.mean_overlap, 2) + "개", f.fix(o.mean_overlap, 2) + "개", "down",
-            "겹침이 적을수록 당첨 기회가 서로 다른 추첨 결과에 분산됩니다.")}
-      ${row("사용한 서로 다른 번호", b.distinct_numbers + "개", o.distinct_numbers + "개", "up",
-            `${n}장이면 번호 슬롯이 ${n * 6}개인데 번호는 45개뿐이라 겹침을 0으로는 못 만듭니다.`)}
+            "겹침이 적을수록 당첨 기회가 서로 다른 추첨 결과에 분산됩니다.",
+            [b.mean_overlap, o.mean_overlap])}
+      ${row("사용한 서로 다른 번호", f.fix(b.distinct_numbers, 1) + "개", o.distinct_numbers + "개", "up",
+            `${n}장이면 번호 슬롯이 ${n * 6}개인데 번호는 45개뿐이라 겹침을 0으로는 못 만듭니다.`,
+            [b.distinct_numbers, o.distinct_numbers])}
       </tbody></table></div>`;
   }
 

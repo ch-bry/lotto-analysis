@@ -166,9 +166,8 @@ def exact_compare(model, prev, n_tickets, *, seed=5):
     몬테카를로로는 이 크기(1.2e-6)를 검증할 수 없어 전수 열거를 쓴다.
     """
     tk, _ = PF.optimize(model, n_tickets, prev, seed=1)
-    rnd = PF.random_tickets(n_tickets, np.random.default_rng(seed))
     opt = PF.exact_evaluate(tk, model, prev)
-    base = PF.exact_evaluate(rnd, model, prev)
+    base = PF.random_baseline(model, prev, n_tickets, seed=seed)
     theo = n_tickets / PF.M
     assert abs(opt["p_jackpot"] - theo) < 1e-15, "P(1등)이 이론값과 다르다 — 버그"
     assert abs(base["p_jackpot"] - theo) < 1e-15
