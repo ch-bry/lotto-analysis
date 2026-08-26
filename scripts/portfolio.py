@@ -13,6 +13,10 @@
             + lam_cov * mean_{i<j} Pcollide(|t_i ∩ t_j|)
     Pcollide(k) 는 겹치는 번호가 k개인 두 티켓이 "둘 다 3개 이상 맞을" 확률로,
     몬테카를로로 한 번 표를 만들어 둔다.
+
+    두 항의 성격이 다르다는 점이 중요하다. 앞항(인기도)은 기대 회수액을 실제로
+    올리고, 뒷항(커버리지)은 기대값은 그대로 둔 채 분산만 줄인다. 가중치
+    COVERAGE_WEIGHT 의 근거는 그 상수 옆 주석에 적어 두었다.
 """
 from __future__ import annotations
 
@@ -34,6 +38,24 @@ M = F.TOTAL_COMBOS
 P_MATCH = {k: comb(PICK, k) * comb(N_MAX - PICK, PICK - k) / M for k in range(PICK + 1)}
 P_ANY_PRIZE = sum(P_MATCH[k] for k in (3, 4, 5, 6))
 CACHE = ROOT / "data" / "collide.json"
+
+#: 커버리지 항의 가중치 배율 (1.0 = Pcollide(1) 의 역수).
+#:
+#: 커버리지는 기대 회수액을 1원도 올리지 못한다. 등수별 기대 당첨 장수가
+#: 자동선택과 정수 단위까지 동일하기 때문이다. 커버리지가 바꾸는 것은
+#: "얼마나 자주 뭔가 당첨되느냐"라는 분산뿐이다. 반면 저인기 조합은 1~3등
+#: 수령액을 실제로 올려 기대 회수액을 올린다. 따라서 이 값은 낮을수록
+#: 기대 회수액이 커진다(10장 기준 1.0 -> 5,668원, 0.05 -> 6,020원, 0 -> 6,325원).
+#:
+#: 이 값이 작을수록 기대 회수액이 커지지만, 너무 작으면 티켓들이 같은 번호로
+#: 몰려 "최소 1개 당첨" 확률이 자동선택보다 나빠진다. 그 경계는 티켓 수에 따라
+#: 다르다 — 10장은 0.05에서 안전하지만 20장은 시드 8개 중 6개가 기준 미달이었다.
+#: 그래서 고정값을 쓰지 않고 calibrate_coverage_weight() 로 티켓 수마다 보정한다.
+#: 아래 값은 보정을 못 돌릴 때(브라우저 폴백 등)의 안전한 기본값이다.
+COVERAGE_WEIGHT = 0.10
+
+#: 보정에서 시도할 후보 가중치 (작은 것부터)
+WEIGHT_CANDIDATES = (0.05, 0.075, 0.10, 0.15, 0.20, 0.30)
 
 
 # --------------------------------------------------------- 충돌 확률표
@@ -94,7 +116,7 @@ def optimize(model, n_tickets, prev=None, *, lam_pop=1.0, lam_cov=None,
     rng = np.random.default_rng(seed)
     collide = collide_table() if collide is None else np.asarray(collide)
     if lam_cov is None:
-        lam_cov = 1.0 / collide[1]
+        lam_cov = COVERAGE_WEIGHT / collide[1]
     n = n_tickets
     n_pairs = n * (n - 1) / 2
 
@@ -219,6 +241,56 @@ def exact_evaluate_many(portfolios, model=None, prev=None, *, chunk=400_000):
             r["payout_index"] = float((1.0 / mult).mean())
         out.append(r)
     return out
+
+
+def calibrate_coverage_weight(model, prev, n_tickets, *, candidates=None, seeds=(1, 2, 3),
+                              baseline_reps=12, collide=None, seed=5, verbose=False):
+    """자동선택보다 확실히 나은 선에서 가장 작은(=수령액에 유리한) 가중치를 고른다.
+
+    규칙: 후보 가중치마다 시드 몇 개로 포트폴리오를 만들고, 그중 **최악**의
+    P(1개 이상 당첨)이 자동선택 기준선 + 1 표준편차를 넘는 가장 작은 값을 쓴다.
+    최악을 기준으로 삼는 이유는 실제로 사용자에게 나가는 건 시드 하나짜리
+    포트폴리오 하나라서, 평균이 아니라 하한이 지켜져야 하기 때문이다.
+
+    후보 전체와 기준선을 8,145,060가지 전수 열거 **한 번**으로 함께 평가한다.
+    """
+    candidates = candidates or WEIGHT_CANDIDATES
+    collide = collide_table() if collide is None else collide
+    rng = np.random.default_rng(seed)
+    base_tks = [random_tickets(n_tickets, rng) for _ in range(baseline_reps)]
+    cand_tks, index = [], []
+    for w in candidates:
+        for sd in seeds:
+            tk, _ = optimize(model, n_tickets, prev, seed=sd,
+                             lam_cov=w / collide[1], collide=collide)
+            cand_tks.append(tk)
+            index.append(w)
+
+    rs = exact_evaluate_many(base_tks + cand_tks, model, prev)
+    b = rs[:baseline_reps]
+    base_p = float(np.mean([r["p_any_prize"] for r in b]))
+    base_sd = float(np.std([r["p_any_prize"] for r in b]))
+    threshold = base_p + base_sd
+
+    table, chosen = [], None
+    for w in candidates:
+        got = [r for r, ww in zip(rs[baseline_reps:], index) if ww == w]
+        worst = min(r["p_any_prize"] for r in got)
+        mult = float(np.mean([r["mean_multiplier"] for r in got]))
+        ok = worst >= threshold
+        table.append({"weight": w, "worst_p_any": worst, "mean_multiplier": mult, "passes": ok})
+        if ok and chosen is None:
+            chosen = w
+    if chosen is None:                       # 후보가 전부 실패하면 가장 보수적인 값
+        chosen = max(candidates)
+    if verbose:
+        print(f"  {n_tickets}장 기준선 {base_p:.5f} ±{base_sd:.5f} -> 통과선 {threshold:.5f}")
+        for row in table:
+            print(f"    가중치 {row['weight']:<6} 최악 P {row['worst_p_any']:.5f} "
+                  f"배수 {row['mean_multiplier']:.3f}  {'통과' if row['passes'] else '미달'}")
+        print(f"  -> 선택: {chosen}")
+    return {"weight": chosen, "baseline_p_any": base_p, "baseline_sd": base_sd,
+            "threshold": threshold, "candidates": table}
 
 
 def random_baseline(model, prev, n_tickets, *, reps=10, seed=5):

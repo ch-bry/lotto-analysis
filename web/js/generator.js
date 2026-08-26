@@ -100,6 +100,10 @@ const LOTTO = (() => {
   const COLLIDE_DEFAULT = [0.000063, 0.000423, 0.001648, 0.003853,
                            0.007403, 0.013495, 0.023925];
 
+  /* 커버리지 항의 가중치. portfolio.py 의 COVERAGE_WEIGHT 와 반드시 같아야
+     브라우저 폴백이 파이썬과 같은 조합을 만든다. */
+  const COVERAGE_WEIGHT = 0.05;
+
   function overlap(a, b) {
     const s = new Set(a);
     return b.reduce((n, v) => n + (s.has(v) ? 1 : 0), 0);
@@ -124,7 +128,7 @@ const LOTTO = (() => {
   function optimize(model, n, prev1, prev2, opts = {}) {
     const collide = opts.collide || COLLIDE_DEFAULT;
     const lamPop = opts.lamPop ?? 1.0;
-    const lamCov = opts.lamCov ?? (1.0 / collide[1]);
+    const lamCov = opts.lamCov ?? (COVERAGE_WEIGHT / collide[1]);
     const iters = opts.iters ?? 150000;
     const temp0 = opts.temp0 ?? 0.05;
     const rand = rngFrom(opts.seed ?? 1);
@@ -228,5 +232,6 @@ const LOTTO = (() => {
   }
 
   return { N_MAX, PICK, TOTAL, FEATURES, CONTEXT, Model, combFeatures,
-           contextFeatures, optimize, overlap, percentileSampler, COLLIDE_DEFAULT };
+           contextFeatures, optimize, overlap, percentileSampler,
+           COLLIDE_DEFAULT, COVERAGE_WEIGHT };
 })();

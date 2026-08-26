@@ -142,14 +142,25 @@ def build_recommendations(df, model, ns=(10, 20), seed=1):
     collide = PF.collide_table()
     out = {}
     for n in ns:
-        tk, _ = PF.optimize(model, n, prev, seed=seed, collide=collide)
+        # 커버리지 가중치의 안전 경계는 티켓 수에 따라 다르다. 고정값을 쓰면
+        # 10장에 맞춘 값이 20장에서 자동선택보다 나빠진다. 매번 보정한다.
+        cal = PF.calibrate_coverage_weight(model, prev, n, collide=collide)
+        tk, _ = PF.optimize(model, n, prev, seed=seed, collide=collide,
+                            lam_cov=cal["weight"] / collide[1])
         ev = PF.exact_evaluate(tk, model, prev)
         rnd = PF.random_baseline(model, prev, n, seed=5)   # backtest 와 동일 기준선
+        assert ev["p_any_prize"] >= rnd["p_any_prize"], \
+            f"{n}장: 최소1개 당첨 확률이 자동선택보다 낮다 — 가중치 보정 실패"
         out[str(n)] = {
             "tickets": [describe(t, prev, model, pct, base_winners) for t in tk],
             "portfolio": ev,
             "random_baseline": rnd,
+            "coverage_weight": cal["weight"],
+            "calibration": cal,
         }
+        print(f"  {n}장: 커버리지 가중치 {cal['weight']} · 인기배수 "
+              f"{ev['mean_multiplier']:.3f} · P(1개↑) {rnd['p_any_prize']:.5f} -> "
+              f"{ev['p_any_prize']:.5f}")
     return {
         "target_draw": target,
         "based_on_draw": latest,
@@ -212,7 +223,11 @@ def main():
 
     print(f"\n[4/6] 백테스트")
     prev = P.prev_draws(df, [latest + 1])[0]      # 다음 회차 기준
-    mc = {str(n): BT.exact_compare(model, prev, n) for n in (10, 20)}
+    collide = PF.collide_table()
+    weights = {n: PF.calibrate_coverage_weight(model, prev, n, collide=collide)["weight"]
+               for n in (10, 20)}
+    mc = {str(n): BT.exact_compare(model, prev, n, lam_cov=weights[n] / collide[1])
+          for n in (10, 20)}
     for n, r in mc.items():
         o, b = r["optimized"], r["random"]
         print(f"  {n}장  P(1등) {b['p_jackpot']:.9f} -> {o['p_jackpot']:.9f}  |  "

@@ -79,7 +79,7 @@ def analytic_expected_return(df, rounds):
 
 
 def walk_forward(df, *, n_tickets=10, start=1000, refit_every=26, n_reps=5,
-                 sa_rounds=500, cache=None, seed=0, verbose=True):
+                 sa_rounds=500, cache=None, seed=0, lam_cov=None, verbose=True):
     """회차 t 예측에 t-1 까지만 사용하는 워크포워드 백테스트.
 
     우리 방식과 자동선택 모두 회차마다 n_reps 번 반복해 평균을 낸다. 반복 수를
@@ -90,6 +90,11 @@ def walk_forward(df, *, n_tickets=10, start=1000, refit_every=26, n_reps=5,
     collide = PF.collide_table()
     rng = np.random.default_rng(seed)
     rounds = df[df.draw_no > start].reset_index(drop=True)
+    if lam_cov is None:                       # 티켓 수에 맞는 가중치를 한 번만 보정
+        prev0 = P.prev_draws(df, [int(df.draw_no.max()) + 1])[0]
+        w = PF.calibrate_coverage_weight(cache.fit(train_to=int(df.draw_no.max())),
+                                         prev0, n_tickets, collide=collide)["weight"]
+        lam_cov = w / collide[1]
 
     model = None
     last_fit = -10 ** 9
@@ -105,7 +110,7 @@ def walk_forward(df, *, n_tickets=10, start=1000, refit_every=26, n_reps=5,
         rnd_tot, rnd_win = [], []
         for rep in range(n_reps):
             tk, _ = PF.optimize(model, n_tickets, prev, n_rounds=sa_rounds,
-                                seed=t * 100 + rep, collide=collide)
+                                seed=t * 100 + rep, collide=collide, lam_cov=lam_cov)
             a, b, _ = score_tickets(tk, row)
             ours_tot.append(a)
             ours_win.append(b)
@@ -159,13 +164,13 @@ def summarize(bt, n_tickets, df=None, n_reps=5):
     }
 
 
-def exact_compare(model, prev, n_tickets, *, seed=5):
+def exact_compare(model, prev, n_tickets, *, seed=5, lam_cov=None):
     """검증 4 — 가능한 추첨 8,145,060가지 전수 열거.
 
     P(1등)은 티켓 집합과 무관하게 (서로 다른 티켓 수)/8,145,060 이어야 한다.
     몬테카를로로는 이 크기(1.2e-6)를 검증할 수 없어 전수 열거를 쓴다.
     """
-    tk, _ = PF.optimize(model, n_tickets, prev, seed=1)
+    tk, _ = PF.optimize(model, n_tickets, prev, seed=1, lam_cov=lam_cov)
     opt = PF.exact_evaluate(tk, model, prev)
     base = PF.random_baseline(model, prev, n_tickets, seed=seed)
     theo = n_tickets / PF.M

@@ -42,6 +42,19 @@
   </p>
   <div class="card" id="heatmap"></div>
 
+  <div class="card small" id="tradeoff">
+    <h3 style="margin-top:0">두 지표의 성격이 다릅니다</h3>
+    <p><b>"최소 1개 이상 당첨 확률"은 돈으로 환산하면 0원입니다.</b>
+    등수별 기대 당첨 장수가 자동선택과 정수 단위까지 완전히 같기 때문입니다
+    (8,145,060가지 전수 열거로 확인). 이 지표가 바꾸는 것은 같은 돈이
+    "몰려서 들어오냐 흩어져서 들어오냐"뿐입니다. 게다가 그 개선은 사실상
+    <b>5등에서만</b> 발생합니다 — 2·3등에서는 개선폭이 정확히 0입니다.</p>
+    <p><b>기대 회수액을 실제로 올리는 것은 인기 배수 하나뿐입니다.</b>
+    1~3등은 당첨금을 나눠 갖기 때문입니다. 그래서 이 사이트는 "자동선택보다
+    어느 지표로도 나쁘지 않다"는 선만 지키고, 나머지는 전부 수령액 쪽에
+    할당하도록 맞춰 두었습니다.</p>
+  </div>
+
   <h2>어떤 조합이 인기 있는가</h2>
   <p class="small muted">
     아래는 회귀 계수가 아니라 <b>무작위 조합 30만 개를 직접 스코어링해 측정한 값</b>입니다.
@@ -91,7 +104,12 @@
     const pctOf = LOTTO.percentileSampler(model, prev1, prev2, 20000);
     regenerated = {};
     for (const n of [10, 20]) {
-      const tk = LOTTO.optimize(model, n, prev1, prev2, { seed: 1, collide: meta.collide });
+      // 커버리지 가중치는 빌드가 티켓 수마다 보정해 둔 값을 그대로 쓴다.
+      // (10장과 20장의 안전 경계가 다르므로 하드코딩하면 안 된다.)
+      const w = rec.by_size[String(n)]?.coverage_weight ?? LOTTO.COVERAGE_WEIGHT;
+      const tk = LOTTO.optimize(model, n, prev1, prev2,
+                                { seed: 1, collide: meta.collide,
+                                  lamCov: w / (meta.collide ?? LOTTO.COLLIDE_DEFAULT)[1] });
       regenerated[n] = tk.map(t => ({
         numbers: t,
         multiplier: model.multiplier(t, prev1, prev2),
@@ -156,6 +174,15 @@
             <div class="sub">기대 회수액 약 ${f.won(n * 500)} (-50%)</div></div>
         </div>
         ${rows}
+      </div>
+      <div class="notice" style="margin-top:16px">
+        <b>${n}장은 순위가 아니라 한 세트입니다</b> — 위에서부터 좋은 순서가 아니며,
+        번호가 서로 겹치지 않도록 ${n}장을 <b>함께</b> 설계했습니다.
+        일부만 사면 그 효과가 사라집니다.
+        <div class="notice-foot">
+          10장 중 몇 장만 살 때 "최소 1개 당첨" 개선폭:
+          1장 0% · 3장 +2.6% · 5장 +3.0% · <b>10장 전부 +7.8%</b>
+        </div>
       </div>
       <p class="hint">"인기도 하위 N%"는 무작위 조합 대비 백분위입니다. 0%에 가까울수록
       남들이 고르지 않는 조합입니다. "예상 동시당첨"은 최근 판매량
